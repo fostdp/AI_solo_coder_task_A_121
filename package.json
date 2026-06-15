@@ -1,0 +1,46 @@
+{
+  "name": "ancient-suspension-bridge-monitoring",
+  "version": "1.0.0",
+  "description": "古代悬索桥风致振动监测与气动优化系统 - Ancient Suspension Bridge Wind-Induced Vibration Monitoring & Aerodynamic Optimization System",
+  "private": true,
+  "scripts": {
+    "frontend:dev": "npx http-server ./frontend -p 3000 -c-1 -o",
+    "frontend:serve": "npx serve ./frontend -l 3000",
+    "simulator:run": "python ./scripts/sensor_simulator.py --interval 60",
+    "simulator:once": "python ./scripts/sensor_simulator.py --once --print-only",
+    "influxdb:init": "influx -import -path=./scripts/init_influxdb.iql -precision=s",
+    "backend:dev": "cd ./backend && cargo run",
+    "backend:release": "cd ./backend && cargo build --release",
+    "backend:check": "cd ./backend && cargo check",
+    "backend:clippy": "cd ./backend && cargo clippy -- -D warnings",
+    "all:start": "concurrently -n BACKEND,FRONTEND,SIM -c blue,green,yellow \"npm:backend:dev\" \"npm:frontend:serve\" \"npm:simulator:run\""
+  },
+  "keywords": [
+    "bridge",
+    "monitoring",
+    "wind-vibration",
+    "flutter",
+    "three.js",
+    "rust",
+    "influxdb",
+    "mqtt",
+    "genetic-algorithm",
+    "cultural-heritage"
+  ],
+  "author": "Bridge History Research Team",
+  "license": "MIT",
+  "devDependencies": {
+    "concurrently": "^8.2.2",
+    "http-server": "^14.1.1",
+    "serve": "^14.2.1"
+  },
+  "engines": {
+    "node": ">=16.0.0",
+    "python": ">=3.8",
+    "rust": ">=1.70.0"
+  },
+  "systemRequirements": {
+    "influxdb": "1.8.x or 2.x",
+    "mqtt": "Mosquitto 2.x or EMQX 5.x"
+  }
+}
