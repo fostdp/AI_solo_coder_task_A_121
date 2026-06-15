@@ -1,7 +1,63 @@
+use crate::dtu_receiver::DTUReceiver;
+use crate::flutter_analyzer::FlutterAnalyzer;
+use crate::influxdb_storage::InfluxDBStorage;
+use crate::mqtt_alerts::{AlertManager, MQTTAlertService};
+use crate::shape_optimizer::PendingOptimizations;
 use serde::{Deserialize, Serialize};
 use chrono::{DateTime, Utc};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::{mpsc, RwLock};
 use uuid::Uuid;
 use validator::Validate;
+
+pub struct AppState {
+    pub storage: Arc<InfluxDBStorage>,
+    pub dtu_receiver: Arc<DTUReceiver>,
+    pub flutter_analyzer: Arc<FlutterAnalyzer>,
+    pub optimizer_tx: mpsc::Sender<SystemMessage>,
+    pub pending_optimizations: PendingOptimizations,
+    pub alert_manager: Arc<AlertManager>,
+    pub mqtt_service: Arc<MQTTAlertService>,
+    pub recent_results: Arc<RwLock<HashMap<String, AerodynamicResult>>>,
+    pub storage_tx: mpsc::Sender<SystemMessage>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SystemMessage {
+    DTUPayloadReceived {
+        payload: DTUPayload,
+        received_at: DateTime<Utc>,
+    },
+    AerodynamicResultReady {
+        result: AerodynamicResult,
+        source_payload: Option<DTUPayload>,
+    },
+    OptimizationRequest {
+        bridge_id: String,
+        config: OptimizationConfig,
+        request_id: Uuid,
+    },
+    OptimizationResultReady {
+        request_id: Uuid,
+        result: OptimizationResult,
+    },
+    AlertTriggered {
+        alert: AlertMessage,
+    },
+    StorageWriteRequest {
+        measurement: StorageMeasurement,
+    },
+    Shutdown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum StorageMeasurement {
+    CableForce { bridge_id: String, cable_id: String, force: f64, temp: f64, time: DateTime<Utc> },
+    Acceleration { bridge_id: String, sensor_id: String, ax: f64, ay: f64, az: f64, time: DateTime<Utc> },
+    WindData { bridge_id: String, sensor_id: String, speed: f64, dir: f64, attack: f64, time: DateTime<Utc> },
+    AeroResult(AerodynamicResult),
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BridgeInfo {
@@ -235,55 +291,59 @@ impl Default for OptimizationConfig {
     }
 }
 
-pub const BRIDGES: &[BridgeInfo] = &[
-    BridgeInfo {
-        bridge_id: "BS001".to_string(), name: "泸定桥".to_string(), location: "四川甘孜泸定县".to_string(),
-        latitude: 29.9092, longitude: 102.2374, length: 103.67, span: 100.0, width: 2.8, cable_count: 13,
-        construction_year: 1706, material: "铁索".to_string(), deck_height: 14.5, design_wind_speed: 35.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS002".to_string(), name: "霁虹桥".to_string(), location: "云南保山澜沧江".to_string(),
-        latitude: 25.4833, longitude: 99.4167, length: 113.4, span: 106.0, width: 3.7, cable_count: 18,
-        construction_year: 1475, material: "铁索".to_string(), deck_height: 21.0, design_wind_speed: 32.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS003".to_string(), name: "云龙桥".to_string(), location: "贵州镇远舞阳河".to_string(),
-        latitude: 27.0500, longitude: 108.4167, length: 95.0, span: 88.0, width: 3.2, cable_count: 12,
-        construction_year: 1520, material: "铁索".to_string(), deck_height: 18.0, design_wind_speed: 30.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS004".to_string(), name: "重安江铁索桥".to_string(), location: "贵州黄平重安江".to_string(),
-        latitude: 26.5833, longitude: 107.9167, length: 42.0, span: 36.5, width: 2.5, cable_count: 15,
-        construction_year: 1871, material: "铁索".to_string(), deck_height: 10.0, design_wind_speed: 28.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS005".to_string(), name: "盘江铁索桥".to_string(), location: "贵州安顺盘江".to_string(),
-        latitude: 25.7500, longitude: 104.7500, length: 78.0, span: 71.0, width: 2.9, cable_count: 14,
-        construction_year: 1638, material: "铁索".to_string(), deck_height: 25.0, design_wind_speed: 38.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS006".to_string(), name: "程阳桥".to_string(), location: "广西柳州三江".to_string(),
-        latitude: 25.9833, longitude: 109.6667, length: 64.4, span: 58.0, width: 3.4, cable_count: 10,
-        construction_year: 1916, material: "铁木混合".to_string(), deck_height: 12.0, design_wind_speed: 25.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS007".to_string(), name: "金龙桥".to_string(), location: "云南丽江金沙江".to_string(),
-        latitude: 27.0333, longitude: 100.4500, length: 116.0, span: 108.0, width: 3.2, cable_count: 16,
-        construction_year: 1878, material: "铁索".to_string(), deck_height: 28.0, design_wind_speed: 40.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS008".to_string(), name: "豆沙关铁索桥".to_string(), location: "云南盐津豆沙关".to_string(),
-        latitude: 28.2000, longitude: 104.2333, length: 55.0, span: 49.0, width: 2.6, cable_count: 11,
-        construction_year: 1560, material: "铁索".to_string(), deck_height: 16.0, design_wind_speed: 33.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS009".to_string(), name: "普安桥".to_string(), location: "四川雅安天全".to_string(),
-        latitude: 30.0833, longitude: 102.7833, length: 48.0, span: 42.0, width: 2.7, cable_count: 9,
-        construction_year: 1812, material: "铁索".to_string(), deck_height: 11.0, design_wind_speed: 29.0,
-    },
-    BridgeInfo {
-        bridge_id: "BS010".to_string(), name: "安顺场铁索桥".to_string(), location: "四川石棉安顺场".to_string(),
-        latitude: 29.3333, longitude: 102.3833, length: 68.0, span: 62.0, width: 2.8, cable_count: 12,
-        construction_year: 1780, material: "铁索".to_string(), deck_height: 13.0, design_wind_speed: 31.0,
-    },
-];
+use lazy_static::lazy_static;
+
+lazy_static! {
+    pub static ref BRIDGES: Vec<BridgeInfo> = vec![
+        BridgeInfo {
+            bridge_id: "BS001".to_string(), name: "泸定桥".to_string(), location: "四川甘孜泸定县".to_string(),
+            latitude: 29.9092, longitude: 102.2374, length: 103.67, span: 100.0, width: 2.8, cable_count: 13,
+            construction_year: 1706, material: "铁索".to_string(), deck_height: 14.5, design_wind_speed: 35.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS002".to_string(), name: "霁虹桥".to_string(), location: "云南保山澜沧江".to_string(),
+            latitude: 25.4833, longitude: 99.4167, length: 113.4, span: 106.0, width: 3.7, cable_count: 18,
+            construction_year: 1475, material: "铁索".to_string(), deck_height: 21.0, design_wind_speed: 32.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS003".to_string(), name: "云龙桥".to_string(), location: "贵州镇远舞阳河".to_string(),
+            latitude: 27.0500, longitude: 108.4167, length: 95.0, span: 88.0, width: 3.2, cable_count: 12,
+            construction_year: 1520, material: "铁索".to_string(), deck_height: 18.0, design_wind_speed: 30.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS004".to_string(), name: "重安江铁索桥".to_string(), location: "贵州黄平重安江".to_string(),
+            latitude: 26.5833, longitude: 107.9167, length: 42.0, span: 36.5, width: 2.5, cable_count: 15,
+            construction_year: 1871, material: "铁索".to_string(), deck_height: 10.0, design_wind_speed: 28.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS005".to_string(), name: "盘江铁索桥".to_string(), location: "贵州安顺盘江".to_string(),
+            latitude: 25.7500, longitude: 104.7500, length: 78.0, span: 71.0, width: 2.9, cable_count: 14,
+            construction_year: 1638, material: "铁索".to_string(), deck_height: 25.0, design_wind_speed: 38.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS006".to_string(), name: "程阳桥".to_string(), location: "广西柳州三江".to_string(),
+            latitude: 25.9833, longitude: 109.6667, length: 64.4, span: 58.0, width: 3.4, cable_count: 10,
+            construction_year: 1916, material: "铁木混合".to_string(), deck_height: 12.0, design_wind_speed: 25.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS007".to_string(), name: "金龙桥".to_string(), location: "云南丽江金沙江".to_string(),
+            latitude: 27.0333, longitude: 100.4500, length: 116.0, span: 108.0, width: 3.2, cable_count: 16,
+            construction_year: 1878, material: "铁索".to_string(), deck_height: 28.0, design_wind_speed: 40.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS008".to_string(), name: "豆沙关铁索桥".to_string(), location: "云南盐津豆沙关".to_string(),
+            latitude: 28.2000, longitude: 104.2333, length: 55.0, span: 49.0, width: 2.6, cable_count: 11,
+            construction_year: 1560, material: "铁索".to_string(), deck_height: 16.0, design_wind_speed: 33.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS009".to_string(), name: "普安桥".to_string(), location: "四川雅安天全".to_string(),
+            latitude: 30.0833, longitude: 102.7833, length: 48.0, span: 42.0, width: 2.7, cable_count: 9,
+            construction_year: 1812, material: "铁索".to_string(), deck_height: 11.0, design_wind_speed: 29.0,
+        },
+        BridgeInfo {
+            bridge_id: "BS010".to_string(), name: "安顺场铁索桥".to_string(), location: "四川石棉安顺场".to_string(),
+            latitude: 29.3333, longitude: 102.3833, length: 68.0, span: 62.0, width: 2.8, cable_count: 12,
+            construction_year: 1780, material: "铁索".to_string(), deck_height: 13.0, design_wind_speed: 31.0,
+        },
+    ];
+}
