@@ -4,7 +4,7 @@ use crate::models::{
 };
 use chrono::Utc;
 use std::f64::consts::PI;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const AIR_DENSITY: f64 = 1.225;
 const GRAVITY: f64 = 9.81;
@@ -31,6 +31,7 @@ impl KalmanState {
     }
 }
 
+#[derive(Clone)]
 pub struct AerodynamicModel {
     pub bridge: BridgeInfo,
     pub flutter_derivatives: FlutterDerivatives,
@@ -39,11 +40,11 @@ pub struct AerodynamicModel {
     pub bending_frequency: f64,
     pub torsional_frequency: f64,
     pub structural_damping: f64,
-    ema_damping: Mutex<f64>,
-    ema_amplitude: Mutex<f64>,
-    kalman_h: Mutex<KalmanState>,
-    kalman_a: Mutex<KalmanState>,
-    reduced_freq_history: Mutex<Vec<f64>>,
+    ema_damping: Arc<Mutex<f64>>,
+    ema_amplitude: Arc<Mutex<f64>>,
+    kalman_h: Arc<Mutex<KalmanState>>,
+    kalman_a: Arc<Mutex<KalmanState>>,
+    reduced_freq_history: Arc<Mutex<Vec<f64>>>,
 }
 
 impl AerodynamicModel {
@@ -61,11 +62,11 @@ impl AerodynamicModel {
             bending_frequency,
             torsional_frequency,
             structural_damping: 0.01,
-            ema_damping: Mutex::new(0.01),
-            ema_amplitude: Mutex::new(0.001),
-            kalman_h: Mutex::new(KalmanState::new(-0.3, 0.001, 0.05)),
-            kalman_a: Mutex::new(KalmanState::new(-1.5, 0.001, 0.08)),
-            reduced_freq_history: Mutex::new(Vec::with_capacity(20)),
+            ema_damping: Arc::new(Mutex::new(0.01)),
+            ema_amplitude: Arc::new(Mutex::new(0.001)),
+            kalman_h: Arc::new(Mutex::new(KalmanState::new(-0.3, 0.001, 0.05))),
+            kalman_a: Arc::new(Mutex::new(KalmanState::new(-1.5, 0.001, 0.08))),
+            reduced_freq_history: Arc::new(Mutex::new(Vec::with_capacity(20))),
         }
     }
 
