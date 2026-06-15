@@ -1,0 +1,115 @@
+{
+  "$schema": "./ga_params.schema.json",
+  "version": "1.1.0",
+
+  "default_optimization_config": {
+    "population_size": 50,
+    "generations": 100,
+    "mutation_rate": 0.25,
+    "mutation_std_dev": 0.15,
+    "crossover_rate": 0.85,
+    "tournament_k": 3,
+    "elitism_count": 2,
+    "wind_speed_range": [5.0, 45.0],
+    "attack_angle_range": [-8.0, 10.0],
+    "random_seed": 42
+  },
+
+  "surrogate_model": {
+    "enable": true,
+    "initial_sample_count": 25,
+    "sampling_method": "latin_hypercube",
+    "retrain_interval_generations": 5,
+    "surrogate_eval_probability": 0.85,
+    "expected_improvement_threshold": 0.01,
+    "kernel": {
+      "type": "rbf",
+      "sigma": 1.0,
+      "length_scale": 0.3,
+      "noise": 0.01
+    },
+    "erf_approximation": {
+      "a1": 0.254829592,
+      "a2": -0.284496736,
+      "a3": 1.421413741,
+      "a4": -1.453152027,
+      "a5": 1.061405429,
+      "p": 0.3275911
+    }
+  },
+
+  "fitness_weights": {
+    "flutter_probability": 1.0,
+    "avg_amplitude": 0.5,
+    "critical_speed_improvement": 0.3
+  },
+
+  "parameter_bounds": {
+    "wind_nose_angle": {
+      "min": 0.0,
+      "max": 45.0,
+      "mutation_std": 6.0
+    },
+    "stabilizer_plate_height": {
+      "min": 0.0,
+      "max": 1.5,
+      "mutation_std": 0.2
+    },
+    "stabilizer_plate_count": {
+      "min": 0,
+      "max": 4,
+      "mutation_std": 1.0
+    },
+    "deck_shape_type": {
+      "options": ["flat", "streamlined", "box", "slotted"],
+      "mutation_prob": 0.2
+    },
+    "fairing_length": {
+      "min": 0.0,
+      "max": 1.0,
+      "mutation_std": 0.15
+    },
+    "porosity": {
+      "min": 0.0,
+      "max": 0.5,
+      "mutation_std": 0.08
+    }
+  },
+
+  "shape_encoding": {
+    "normalization": {
+      "wind_nose_angle_divisor": 45.0,
+      "stabilizer_height_divisor": 1.5,
+      "stabilizer_count_divisor": 4.0,
+      "type_divisor": 3.0,
+      "fairing_length_divisor": 1.0,
+      "porosity_divisor": 0.5
+    }
+  },
+
+  "alert_thresholds": {
+    "vibration_warning_m": 0.15,
+    "vibration_critical_m": 0.225,
+    "vibration_emergency_m": 0.30,
+    "flutter_margin_warning": 0.15,
+    "flutter_margin_critical": 0.05,
+    "flutter_margin_emergency": 0.0,
+    "cable_force_deviation_warning": 0.25,
+    "cable_force_deviation_critical": 0.375,
+    "acceleration_threshold_g": 0.5
+  },
+
+  "mqtt_config": {
+    "base_topic": "heritage_center/bridge_alerts",
+    "qos": 1,
+    "keep_alive_secs": 60,
+    "max_packet_size": 10240
+  },
+
+  "channel_buffer_sizes": {
+    "dtu_to_analyzer": 100,
+    "analyzer_to_alarm": 200,
+    "analyzer_to_storage": 200,
+    "optimizer_to_response": 50
+  }
+}
