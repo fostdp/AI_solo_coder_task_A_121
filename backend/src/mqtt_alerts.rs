@@ -3,6 +3,7 @@ use rumqttc::{AsyncClient, MqttOptions, QoS};
 use std::time::Duration;
 use tokio::time;
 
+#[derive(Clone)]
 pub struct MQTTAlertService {
     client: AsyncClient,
     alert_topic: String,
@@ -10,10 +11,11 @@ pub struct MQTTAlertService {
 }
 
 impl MQTTAlertService {
-    pub fn new(host: &str, port: u16, client_id: &str, alert_topic: &str) -> Result<Self, String> {
+    pub async fn new(host: &str, port: u16, client_id: &str) -> Self {
+        let alert_topic = format!("bridge_alerts/{}", client_id);
         let mut mqtt_options = MqttOptions::new(client_id, host, port);
         mqtt_options.set_keep_alive(Duration::from_secs(30));
-        mqtt_options.set_reconnect_delay(Duration::from_secs(5));
+        mqtt_options.set_inflight(100);
 
         let (client, mut eventloop) = AsyncClient::new(mqtt_options, 100);
         let alert_topic = alert_topic.to_string();
@@ -30,11 +32,11 @@ impl MQTTAlertService {
             }
         });
 
-        Ok(MQTTAlertService {
+        MQTTAlertService {
             client,
             alert_topic,
             enabled: true,
-        })
+        }
     }
 
     pub fn disabled() -> Self {
@@ -104,6 +106,13 @@ impl AlertSeverity {
     }
 }
 
+impl std::fmt::Display for AlertSeverity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+#[derive(Clone)]
 pub struct AlertManager {
     mqtt_service: MQTTAlertService,
     vibration_threshold: f64,
@@ -112,9 +121,9 @@ pub struct AlertManager {
 }
 
 impl AlertManager {
-    pub fn new(mqtt_service: MQTTAlertService) -> Self {
+    pub fn new() -> Self {
         AlertManager {
-            mqtt_service,
+            mqtt_service: MQTTAlertService::disabled(),
             vibration_threshold: 0.15,
             flutter_margin_threshold: 0.15,
             cable_force_deviation: 0.25,
