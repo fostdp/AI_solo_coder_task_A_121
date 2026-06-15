@@ -1,19 +1,13 @@
-use crate::aerodynamic_model::AerodynamicModel;
-use crate::genetic_optimizer::GeneticOptimizer;
-use crate::influxdb_storage::InfluxDBStorage;
-use crate::mqtt_alerts::AlertManager;
 use crate::models::*;
-use actix_web::{web, HttpResponse, Responder};
-use chrono::{Duration, Utc};
+use crate::dtu_receiver::DTUReceiver;
+use actix_web::{web, HttpResponse};
+use chrono::Utc;
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
-use tokio::sync::RwLock;
+use tokio::sync::oneshot;
+use tracing::{info, warn};
+use uuid::Uuid;
 
-pub struct AppState {
-    pub storage: Arc<InfluxDBStorage>,
-    pub alert_manager: Arc<AlertManager>,
-    pub recent_results: RwLock<std::collections::HashMap<String, AerodynamicResult>>,
-}
+pub use crate::models::AppState;
 
 #[derive(Debug, Deserialize)]
 pub struct BridgeQuery {
@@ -72,79 +66,63 @@ impl<T: Serialize> ApiResponse<T> {
     }
 }
 
-fn get_bridge(bridge_id: &str) -> Option<&BridgeInfo> {
+fn lookup_bridge(bridge_id: &str) -> Option<&BridgeInfo> {
     BRIDGES.iter().find(|b| b.bridge_id == bridge_id)
 }
 
-pub async fn get_all_bridges() -> impl Responder {
-    HttpResponse::Ok().json(ApiResponse::ok(BRIDGES))
+pub async fn health_check() -> HttpResponse {
+    HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
+        "status": "healthy",
+        "service": "bridge_monitoring_backend",
+        "version": "1.1.0",
+        "architecture": "microservices_with_mpsc_channels"
+    })))
 }
 
-pub async fn get_bridge_info(path: web::Path<BridgeQuery>) -> impl Responder {
-    match get_bridge(&path.bridge_id) {
+pub async fn get_bridges() -> HttpResponse {
+    HttpResponse::Ok().json(ApiResponse::ok(&*BRIDGES))
+}
+
+pub async fn get_bridge_handler(path: web::Path<String>) -> HttpResponse {
+    let bridge_id = path.into_inner();
+    match lookup_bridge(&bridge_id) {
         Some(bridge) => HttpResponse::Ok().json(ApiResponse::ok(bridge)),
-        None => HttpResponse::NotFound().json(ApiResponse::<BridgeInfo>::err("Bridge not found")),
+        None => HttpResponse::NotFound().json(ApiResponse::<&BridgeInfo>::err("Bridge not found")),
     }
 }
 
 pub async fn receive_dtu_data(
     payload: web::Json<DTUPayload>,
-    data: web::Data<Arc<AppState>>,
-) -> impl Responder {
-    let timestamp = payload.timestamp;
+    data: web::Data<AppState>,
+) -> HttpResponse {
     let bridge_id = payload.bridge_id.clone();
+    info!("[API] 收到DTU上报 bridge_id={}", bridge_id);
 
-    match data.storage.handle_dtu_payload(&payload).await {
+    match DTUReceiver::validate_payload(&payload) {
+        Ok(_) => {},
+        Err(e) => {
+            warn!("[API] DTU数据校验失败 bridge_id={}: {}", bridge_id, e);
+            return HttpResponse::BadRequest().json(ApiResponse::<serde_json::Value>::err(&format!("Validation failed: {}", e)));
+        }
+    }
+
+    match data.dtu_receiver.process_payload(payload.into_inner()).await {
         Ok(count) => {
-            if let Some(bridge) = get_bridge(&bridge_id) {
-                let model = AerodynamicModel::new(bridge);
-                let wind_speed = payload.wind.speed;
-                let attack_angle = payload.wind.attack_angle;
-                let result = model.evaluate_aerodynamic_performance(wind_speed, attack_angle, None);
+            let recent = data.recent_results.read().await;
+            let result = recent.get(&bridge_id).cloned();
+            drop(recent);
 
-                let _ = data
-                    .alert_manager
-                    .check_vibration_alert(&bridge_id, result.vibration_amplitude, timestamp)
-                    .await;
-                let _ = data
-                    .alert_manager
-                    .check_flutter_alert(
-                        &bridge_id,
-                        result.flutter_margin,
-                        result.wind_speed,
-                        result.flutter_critical_speed,
-                        timestamp,
-                    )
-                    .await;
-
-                let _ = data.storage.write_aerodynamic_result(&result).await;
-                let mut recent = data.recent_results.write().await;
-                recent.insert(bridge_id.clone(), result.clone());
-
-                let max_az = payload
-                    .accelerations
-                    .iter()
-                    .map(|a| a.az.abs())
-                    .fold(0.0_f64, f64::max);
-                if max_az > 0.5 {
-                    let _ = data
-                        .alert_manager
-                        .check_vibration_alert(
-                            &bridge_id,
-                            max_az / 98.1,
-                            timestamp,
-                        )
-                        .await;
-                }
-
-                return HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
+            if let Some(result) = result {
+                HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
                     "written_points": count,
                     "aerodynamic_result": result
-                })));
+                })))
+            } else {
+                HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
+                    "written_points": count,
+                    "note": "Aerodynamic analysis in progress, result will be available shortly"
+                })))
             }
-            HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
-                "written_points": count
-            })))
         }
         Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<serde_json::Value>::err(&e)),
     }
@@ -152,95 +130,111 @@ pub async fn receive_dtu_data(
 
 pub async fn evaluate_aerodynamics(
     query: web::Query<AeroEvalQuery>,
-) -> impl Responder {
-    let bridge = match get_bridge(&query.bridge_id) {
-        Some(b) => b,
-        None => return HttpResponse::NotFound().json(ApiResponse::<AerodynamicResult>::err("Bridge not found")),
-    };
-
-    let model = AerodynamicModel::new(bridge);
+    data: web::Data<AppState>,
+) -> HttpResponse {
     let attack_angle = query.attack_angle.unwrap_or(0.0);
-    let result = model.evaluate_aerodynamic_performance(query.wind_speed, attack_angle, None);
-
-    HttpResponse::Ok().json(ApiResponse::ok(result))
+    match data.flutter_analyzer.evaluate_external(
+        &query.bridge_id, query.wind_speed, attack_angle, None
+    ).await {
+        Ok(result) => HttpResponse::Ok().json(ApiResponse::ok(result)),
+        Err(e) => HttpResponse::NotFound().json(ApiResponse::<AerodynamicResult>::err(&e)),
+    }
 }
 
 pub async fn evaluate_with_shape(
     query: web::Query<AeroEvalQuery>,
     shape: web::Json<DeckAerodynamicShape>,
-) -> impl Responder {
-    let bridge = match get_bridge(&query.bridge_id) {
-        Some(b) => b,
-        None => return HttpResponse::NotFound().json(ApiResponse::<AerodynamicResult>::err("Bridge not found")),
-    };
-
-    let model = AerodynamicModel::new(bridge);
+    data: web::Data<AppState>,
+) -> HttpResponse {
     let attack_angle = query.attack_angle.unwrap_or(0.0);
-    let result = model.evaluate_aerodynamic_performance(query.wind_speed, attack_angle, Some(&shape));
-
-    HttpResponse::Ok().json(ApiResponse::ok(result))
+    match data.flutter_analyzer.evaluate_external(
+        &query.bridge_id, query.wind_speed, attack_angle, Some(&shape)
+    ).await {
+        Ok(result) => HttpResponse::Ok().json(ApiResponse::ok(result)),
+        Err(e) => HttpResponse::NotFound().json(ApiResponse::<AerodynamicResult>::err(&e)),
+    }
 }
 
 pub async fn get_vibration_response(
     query: web::Query<VibrationQuery>,
-) -> impl Responder {
-    let bridge = match get_bridge(&query.bridge_id) {
-        Some(b) => b,
-        None => return HttpResponse::NotFound().json(ApiResponse::<VibrationResponse>::err("Bridge not found")),
-    };
-
-    let model = AerodynamicModel::new(bridge);
+    data: web::Data<AppState>,
+) -> HttpResponse {
     let attack_angle = query.attack_angle.unwrap_or(0.0);
-    let duration = query.duration.unwrap_or(10.0);
-    let dt = query.dt.unwrap_or(0.01);
-    let response = model.compute_vibration_response(query.wind_speed, attack_angle, duration, dt);
-
-    HttpResponse::Ok().json(ApiResponse::ok(response))
+    match data.flutter_analyzer.compute_vibration_response(
+        &query.bridge_id, query.wind_speed, attack_angle, query.duration, query.dt
+    ).await {
+        Ok(response) => HttpResponse::Ok().json(ApiResponse::ok(response)),
+        Err(e) => HttpResponse::NotFound().json(ApiResponse::<VibrationResponse>::err(&e)),
+    }
 }
 
 pub async fn get_deck_deformation(
     query: web::Query<DeformationQuery>,
-) -> impl Responder {
-    let bridge = match get_bridge(&query.bridge_id) {
-        Some(b) => b,
-        None => return HttpResponse::NotFound().json(ApiResponse::<Vec<(f64, f64, f64)>>::err("Bridge not found")),
-    };
-
-    let model = AerodynamicModel::new(bridge);
+    data: web::Data<AppState>,
+) -> HttpResponse {
     let attack_angle = query.attack_angle.unwrap_or(0.0);
-    let segments = query.segments.unwrap_or(50);
-    let deformation = model.compute_deck_deformation(query.wind_speed, attack_angle, segments);
-
-    HttpResponse::Ok().json(ApiResponse::ok(deformation))
+    match data.flutter_analyzer.compute_deck_deformation(
+        &query.bridge_id, query.wind_speed, attack_angle, query.segments
+    ).await {
+        Ok(deformation) => HttpResponse::Ok().json(ApiResponse::ok(deformation)),
+        Err(e) => HttpResponse::NotFound().json(ApiResponse::<Vec<(f64, f64, f64)>>::err(&e)),
+    }
 }
 
 pub async fn run_optimization(
     config: web::Json<OptimizationConfig>,
-) -> impl Responder {
-    let bridge = match get_bridge(&config.bridge_id) {
-        Some(b) => b,
-        None => return HttpResponse::NotFound().json(ApiResponse::<OptimizationResult>::err("Bridge not found")),
+    data: web::Data<AppState>,
+) -> HttpResponse {
+    let bridge_id = config.bridge_id.clone();
+    if lookup_bridge(&bridge_id).is_none() {
+        return HttpResponse::NotFound().json(ApiResponse::<OptimizationResult>::err("Bridge not found"));
+    }
+
+    let request_id = Uuid::new_v4();
+    info!("[API] 收到优化请求 bridge_id={}, request_id={}", bridge_id, request_id);
+
+    let (tx, rx) = oneshot::channel::<OptimizationResult>();
+    data.pending_optimizations.lock().await.insert(request_id, tx);
+
+    let msg = SystemMessage::OptimizationRequest {
+        bridge_id: bridge_id.clone(),
+        config: config.into_inner(),
+        request_id,
     };
 
-    let model = AerodynamicModel::new(bridge);
-    let optimizer = GeneticOptimizer::new(&model, config.into_inner());
-    let result = optimizer.run();
+    if let Err(e) = data.optimizer_tx.send(msg).await {
+        warn!("[API] 优化请求入队失败: {}", e);
+        data.pending_optimizations.lock().await.remove(&request_id);
+        return HttpResponse::InternalServerError().json(ApiResponse::<OptimizationResult>::err("Optimization service unavailable"));
+    }
 
-    HttpResponse::Ok().json(ApiResponse::ok(result))
+    match tokio::time::timeout(std::time::Duration::from_secs(120), rx).await {
+        Ok(Ok(result)) => {
+            info!("[API] 优化完成 request_id={}, Ucr提升={:.1}%", request_id, result.improved_critical_speed);
+            HttpResponse::Ok().json(ApiResponse::ok(result))
+        }
+        Ok(Err(_)) => HttpResponse::InternalServerError().json(ApiResponse::<OptimizationResult>::err("Optimization result channel closed")),
+        Err(_) => {
+            data.pending_optimizations.lock().await.remove(&request_id);
+            HttpResponse::RequestTimeout().json(ApiResponse::<OptimizationResult>::err("Optimization timed out after 120s"))
+        }
+    }
 }
 
-pub async fn get_recent_aerodynamic_result(
-    path: web::Path<BridgeQuery>,
-    data: web::Data<Arc<AppState>>,
-) -> impl Responder {
+pub async fn get_recent_aero_result(
+    path: web::Path<String>,
+    data: web::Data<AppState>,
+) -> HttpResponse {
+    let bridge_id = path.into_inner();
     let recent = data.recent_results.read().await;
-    match recent.get(&path.bridge_id) {
+    match recent.get(&bridge_id) {
         Some(result) => HttpResponse::Ok().json(ApiResponse::ok(result.clone())),
         None => {
-            if let Some(bridge) = get_bridge(&path.bridge_id) {
-                let model = AerodynamicModel::new(bridge);
-                let result = model.evaluate_aerodynamic_performance(15.0, 0.0, None);
-                HttpResponse::Ok().json(ApiResponse::ok(result))
+            if let Some(_bridge) = lookup_bridge(&bridge_id) {
+                match data.flutter_analyzer.evaluate_external(&bridge_id, 15.0, 0.0, None).await {
+                    Ok(result) => HttpResponse::Ok().json(ApiResponse::ok(result)),
+                    Err(e) => HttpResponse::InternalServerError().json(ApiResponse::<AerodynamicResult>::err(&e)),
+                }
             } else {
                 HttpResponse::NotFound().json(ApiResponse::<AerodynamicResult>::err("Bridge not found"))
             }
@@ -248,46 +242,13 @@ pub async fn get_recent_aerodynamic_result(
     }
 }
 
-pub async fn get_flutter_critical_speed_curve(
-    path: web::Path<BridgeQuery>,
-) -> impl Responder {
-    let bridge = match get_bridge(&path.bridge_id) {
-        Some(b) => b,
-        None => return HttpResponse::NotFound().json(ApiResponse::<Vec<(f64, f64, f64)>>::err("Bridge not found")),
-    };
-
-    let model = AerodynamicModel::new(bridge);
-    let mut curve = Vec::new();
-    for angle_i in -10..=10 {
-        let attack_angle = angle_i as f64;
-        let result = model.evaluate_aerodynamic_performance(30.0, attack_angle, None);
-        curve.push((attack_angle, result.flutter_critical_speed, result.aerodynamic_damping));
+pub async fn get_flutter_curve(
+    path: web::Path<String>,
+    data: web::Data<AppState>,
+) -> HttpResponse {
+    let bridge_id = path.into_inner();
+    match data.flutter_analyzer.compute_flutter_curve(&bridge_id, None).await {
+        Ok(curve) => HttpResponse::Ok().json(ApiResponse::ok(curve)),
+        Err(e) => HttpResponse::NotFound().json(ApiResponse::<Vec<(f64, f64)>>::err(&e)),
     }
-
-    HttpResponse::Ok().json(ApiResponse::ok(curve))
-}
-
-pub async fn health_check() -> impl Responder {
-    HttpResponse::Ok().json(ApiResponse::ok(serde_json::json!({
-        "status": "healthy",
-        "service": "bridge_monitoring_backend",
-        "version": "1.0.0"
-    })))
-}
-
-pub fn configure_routes(cfg: &mut web::ServiceConfig) {
-    cfg.service(
-        web::scope("/api/v1")
-            .route("/health", web::get().to(health_check))
-            .route("/bridges", web::get().to(get_all_bridges))
-            .route("/bridges/{bridge_id}", web::get().to(get_bridge_info))
-            .route("/dtu/receive", web::post().to(receive_dtu_data))
-            .route("/aerodynamics/evaluate", web::get().to(evaluate_aerodynamics))
-            .route("/aerodynamics/evaluate-with-shape", web::post().to(evaluate_with_shape))
-            .route("/aerodynamics/vibration-response", web::get().to(get_vibration_response))
-            .route("/aerodynamics/deck-deformation", web::get().to(get_deck_deformation))
-            .route("/aerodynamics/recent/{bridge_id}", web::get().to(get_recent_aerodynamic_result))
-            .route("/aerodynamics/flutter-curve/{bridge_id}", web::get().to(get_flutter_critical_speed_curve))
-            .route("/optimization/run", web::post().to(run_optimization)),
-    );
 }
