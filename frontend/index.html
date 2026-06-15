@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>古代悬索桥风致振动监测与气动优化系统</title>
+    <script src="https://unpkg.com/three@0.160.0/build/three.min.js"></script>
+    <script src="https://unpkg.com/three@0.160.0/examples/js/controls/OrbitControls.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+    <div id="sidebar">
+        <div id="sidebar-header">
+            <h1>🌉 古代悬索桥监测</h1>
+            <h2>Wind-Induced Vibration Monitoring</h2>
+        </div>
+        <div class="panel">
+            <div class="panel-title">桥梁列表 (10座)</div>
+            <div class="bridge-list" id="bridge-list"></div>
+        </div>
+        <div class="panel">
+            <div class="panel-title">桥梁档案</div>
+            <div id="bridge-info"><div class="loading">请选择桥梁</div></div>
+        </div>
+        <div class="panel">
+            <div class="panel-title">实时气动性能</div>
+            <div id="aero-metrics"><div class="loading">等待数据...</div></div>
+        </div>
+        <div class="panel">
+            <div class="panel-title">气动优化 (GA)</div>
+            <div class="control-form">
+                <div class="form-field"><label>种群</label><input type="number" id="ga-pop" value="50"></div>
+                <div class="form-field"><label>代数</label><input type="number" id="ga-gen" value="60"></div>
+                <div class="form-field"><label>突变率</label><input type="number" id="ga-mut" value="0.1" step="0.05"></div>
+                <div class="form-field"><label>交叉率</label><input type="number" id="ga-cross" value="0.8" step="0.05"></div>
+            </div>
+            <button class="btn primary" style="width:100%;margin-top:12px;" onclick="runOptimization()">🚀 运行遗传算法优化</button>
+            <div id="ga-result"></div>
+        </div>
+        <div class="panel">
+            <div class="panel-title">风场模拟控制</div>
+            <div class="control-form">
+                <div class="form-field"><label>风速 m/s</label><input type="number" id="ctrl-wind" value="15" step="0.5" min="0" max="80"></div>
+                <div class="form-field"><label>攻角 °</label><input type="number" id="ctrl-angle" value="0" step="0.5" min="-15" max="15"></div>
+            </div>
+            <button class="btn" style="width:100%;margin-top:10px;" onclick="applyWindControl()">应用</button>
+        </div>
+    </div>
+    <div id="main-area">
+        <div id="top-bar">
+            <div class="top-title">🔍 三维风振可视化</div>
+            <div class="top-divider"></div>
+            <div class="top-stat"><span>风速</span><span class="num" id="stat-wind">--</span><span>m/s</span></div>
+            <div class="top-stat"><span>攻角</span><span class="num" id="stat-dir">--</span><span>°</span></div>
+            <div class="top-stat"><span>振幅</span><span class="num" id="stat-amp">--</span><span>m</span></div>
+            <div class="top-stat"><span>临界风速</span><span class="num" id="stat-crit">--</span><span>m/s</span></div>
+            <div class="top-controls">
+                <div class="toggle-group">
+                    <div class="tg-btn active" data-toggle="windFlow" onclick="toggleLayer('windFlow')">风场粒子</div>
+                    <div class="tg-btn active" data-toggle="deformation" onclick="toggleLayer('deformation')">变形云图</div>
+                    <div class="tg-btn" data-toggle="cables" onclick="toggleLayer('cables')">索力着色</div>
+                </div>
+                <button class="btn" onclick="resetCamera()">重置视角</button>
+            </div>
+        </div>
+        <div id="canvas-container">
+            <div id="info-overlay">
+                <div class="overlay-card">
+                    <h3>桥面状态</h3>
+                    <div class="overlay-value safe" id="overlay-status">安全</div>
+                    <div class="overlay-sub" id="overlay-status-sub">颤振裕度充足</div>
+                </div>
+                <div class="overlay-card">
+                    <h3>颤振裕度</h3>
+                    <div class="overlay-value safe" id="overlay-margin">--%</div>
+                    <div class="overlay-sub">阈值 15%</div>
+                </div>
+            </div>
+            <div id="alerts-panel" class="collapsed">
+                <div class="alerts-header" onclick="toggleAlerts()">
+                    <div class="t">🚨 告警 <span class="badge" id="alert-count">0</span></div>
+                    <div>▼</div>
+                </div>
+                <div class="alerts-list" id="alerts-list"><div class="loading">暂无告警</div></div>
+            </div>
+            <div class="legend-bar">
+                <span class="label">桥面变形</span>
+                <div class="color-gradient"><div class="grad-ticks"><span>0</span><span>0.05m</span><span>0.1m</span><span>0.15m</span><span>0.2m+</span></div></div>
+                <span class="label">安全←</span><span class="label">→危险</span>
+            </div>
+            <div id="bottom-panel">
+                <div class="panel-tabs">
+                    <div class="panel-tab active" data-tab="vibration" onclick="switchTab('vibration')">风振响应</div>
+                    <div class="panel-tab" data-tab="flutter" onclick="switchTab('flutter')">颤振临界</div>
+                    <div class="panel-tab" data-tab="cable" onclick="switchTab('cable')">索力分布</div>
+                </div>
+                <div class="panel-content">
+                    <div class="panel-section active" id="tab-vibration">
+                        <div class="chart-title"><span>竖向加速度时程</span><span class="unit" id="vib-unit">RMS: --</span></div>
+                        <canvas id="canvas-vibration" width="340" height="180"></canvas>
+                        <div class="chart-title" style="margin-top:10px;"><span>位移衰减曲线</span><span class="unit" id="disp-unit">峰值: --</span></div>
+                        <canvas id="canvas-displacement" width="340" height="100" style="margin-top:4px;"></canvas>
+                    </div>
+                    <div class="panel-section" id="tab-flutter">
+                        <div class="chart-title"><span>颤振临界风速 vs 攻角</span><span class="unit">m/s</span></div>
+                        <canvas id="canvas-flutter" width="340" height="180"></canvas>
+                        <div class="info-row" style="margin-top:10px;"><span class="label">气动阻尼</span><span class="value" id="aero-damp">--</span></div>
+                        <div class="info-row"><span class="label">颤振概率估计</span><span class="value" id="flutter-prob">--</span></div>
+                    </div>
+                    <div class="panel-section" id="tab-cable">
+                        <div class="chart-title"><span>各索力分布 (kN)</span><span class="unit" id="cable-count">共 -- 根</span></div>
+                        <canvas id="canvas-cable" width="340" height="200"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+<div id="detail-modal">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2 id="modal-title">桥面检测点详情</h2>
+            <div class="modal-close" onclick="closeModal()">✕</div>
+        </div>
+        <div class="modal-body" id="modal-body"></div>
+    </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
