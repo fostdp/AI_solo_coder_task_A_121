@@ -2,12 +2,11 @@ use crate::models::{
     CableForceData, DeckAccelerationData, DTUPayload, WindData, AerodynamicResult,
 };
 use chrono::{DateTime, Utc};
-use influxdb::Query;
-use influxdb::{Client, InfluxDbWriteable};
+use influxdb::{Client, InfluxDbWriteable, ReadQuery};
 
 pub struct InfluxDBStorage {
-    client: Client,
-    database: String,
+    pub(crate) client: Client,
+    pub(crate) database: String,
 }
 
 #[derive(InfluxDbWriteable)]
@@ -195,7 +194,7 @@ impl InfluxDBStorage {
              FROM wind_data WHERE bridge_id = '{}' ORDER BY time DESC LIMIT {}",
             bridge_id, limit
         );
-        let query = Query::new(query_str);
+        let query = ReadQuery::new(query_str);
         let _result = self.client.json_query(query).await
             .map_err(|e| format!("Query error: {}", e))?;
         Ok(Vec::new())
@@ -215,7 +214,7 @@ impl InfluxDBStorage {
             start.format("%Y-%m-%dT%H:%M:%SZ"),
             end.format("%Y-%m-%dT%H:%M:%SZ")
         );
-        let _query = Query::new(query_str);
+        let _query = ReadQuery::new(query_str);
         Ok(Vec::new())
     }
 }
