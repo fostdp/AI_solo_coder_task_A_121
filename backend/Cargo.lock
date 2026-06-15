@@ -405,6 +405,7 @@ dependencies = [
  "env_logger",
  "futures",
  "influxdb",
+ "lazy_static",
  "log",
  "nalgebra 0.32.6",
  "rand 0.8.6",
@@ -1303,12 +1304,24 @@ dependencies = [
  "chrono",
  "futures-util",
  "http",
+ "influxdb_derive",
  "lazy_static",
  "regex",
  "reqwest",
  "serde",
  "serde_json",
  "thiserror",
+]
+
+[[package]]
+name = "influxdb_derive"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ac96b3660efd0cde32b0b20bc86cc93f33269cd9f6c97e759e0b0259b2133fb"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
 ]
 
 [[package]]
