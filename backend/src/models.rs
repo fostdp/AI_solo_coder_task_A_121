@@ -95,6 +95,10 @@ pub struct FlutterDerivatives {
     pub a_star: [f64; 6],
     pub h_prime: [f64; 6],
     pub a_prime: [f64; 6],
+    pub h_star_ci: [f64; 6],
+    pub a_star_ci: [f64; 6],
+    pub h_prime_ci: [f64; 6],
+    pub a_prime_ci: [f64; 6],
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -108,6 +112,9 @@ pub struct AerodynamicResult {
     pub flutter_margin: f64,
     pub is_safe: bool,
     pub timestamp: DateTime<Utc>,
+    pub damping_confidence_interval: (f64, f64),
+    pub amplitude_confidence_interval: (f64, f64),
+    pub turbulence_intensity: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
