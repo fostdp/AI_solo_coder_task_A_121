@@ -1,0 +1,63 @@
+# InfluxDB Initialization Script for Ancient Suspension Bridge Monitoring System
+# Create database
+CREATE DATABASE bridge_monitoring WITH DURATION 365d REPLICATION 1 SHARD DURATION 7d NAME "autogen"
+
+# Use database
+USE bridge_monitoring
+
+# Create retention policies
+CREATE RETENTION POLICY "raw_data" ON "bridge_monitoring" DURATION 30d REPLICATION 1 SHARD DURATION 1d DEFAULT
+CREATE RETENTION POLICY "hourly_agg" ON "bridge_monitoring" DURATION 365d REPLICATION 1 SHARD DURATION 7d
+CREATE RETENTION POLICY "daily_agg" ON "bridge_monitoring" DURATION 1825d REPLICATION 1 SHARD DURATION 30d
+
+# Create continuous queries for aggregation
+CREATE CONTINUOUS QUERY "cq_hourly_cable_force" ON "bridge_monitoring"
+BEGIN
+  SELECT mean(cable_force) AS cable_force_mean, max(cable_force) AS cable_force_max, min(cable_force) AS cable_force_min
+  INTO "hourly_agg"."hourly_cable_force"
+  FROM "raw_data"."cable_force"
+  GROUP BY time(1h), bridge_id, cable_id
+END
+
+CREATE CONTINUOUS QUERY "cq_hourly_acceleration" ON "bridge_monitoring"
+BEGIN
+  SELECT mean(acceleration_x) AS ax_mean, mean(acceleration_y) AS ay_mean, mean(acceleration_z) AS az_mean,
+         max(acceleration_z) AS az_max, stddev(acceleration_z) AS az_stddev
+  INTO "hourly_agg"."hourly_acceleration"
+  FROM "raw_data"."deck_acceleration"
+  GROUP BY time(1h), bridge_id, sensor_id
+END
+
+CREATE CONTINUOUS QUERY "cq_hourly_wind" ON "bridge_monitoring"
+BEGIN
+  SELECT mean(wind_speed) AS wind_speed_mean, max(wind_speed) AS wind_speed_max,
+         mean(wind_direction) AS wind_direction_mean, stddev(wind_speed) AS wind_speed_stddev
+  INTO "hourly_agg"."hourly_wind"
+  FROM "raw_data"."wind_data"
+  GROUP BY time(1h), bridge_id, sensor_id
+END
+
+CREATE CONTINUOUS QUERY "cq_daily_vibration" ON "bridge_monitoring"
+BEGIN
+  SELECT mean(az_stddev) AS vibration_level, max(az_max) AS peak_acceleration
+  INTO "daily_agg"."daily_vibration"
+  FROM "hourly_agg"."hourly_acceleration"
+  GROUP BY time(1d), bridge_id
+END
+
+# Create users
+CREATE USER "bridge_reader" WITH PASSWORD 'bridge_read_2024'
+CREATE USER "bridge_writer" WITH PASSWORD 'bridge_write_2024'
+CREATE USER "admin" WITH PASSWORD 'bridge_admin_2024' WITH ALL PRIVILEGES
+
+# Grant permissions
+GRANT READ ON "bridge_monitoring" TO "bridge_reader"
+GRANT WRITE ON "bridge_monitoring" TO "bridge_writer"
+GRANT ALL ON "bridge_monitoring" TO "admin"
+
+# Insert bridge metadata (tags)
+# Bridge IDs: BS001-BS010 (10 ancient iron-chain bridges in Southwest China)
+
+# Sample retention policy check
+SHOW RETENTION POLICIES ON "bridge_monitoring"
+SHOW CONTINUOUS QUERIES
