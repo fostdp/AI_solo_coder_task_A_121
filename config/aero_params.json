@@ -1,0 +1,69 @@
+{
+  "$schema": "./aero_params.schema.json",
+  "version": "1.1.0",
+  "air_density": 1.225,
+  "gravity": 9.81,
+  "structural_damping": 0.01,
+  "confidence_z_score": 1.96,
+
+  "flutter_derivatives": {
+    "reduced_frequency_points": [0.0, 0.5, 1.0, 1.5, 2.0, 2.5],
+    "h_star":        [0.0, -0.5, -0.8, -0.6, -0.3, -0.1],
+    "a_star":        [0.0, -1.0, -2.0, -2.5, -2.2, -1.8],
+    "h_prime":       [0.0,  2.0,  4.0,  3.5,  2.5,  1.5],
+    "a_prime":       [0.0,  0.5,  1.0,  1.5,  2.0,  2.5],
+    "h_star_ci":     [0.01, 0.03, 0.05, 0.04, 0.03, 0.02],
+    "a_star_ci":     [0.01, 0.05, 0.08, 0.10, 0.09, 0.07],
+    "h_prime_ci":    [0.02, 0.06, 0.10, 0.09, 0.07, 0.05],
+    "a_prime_ci":    [0.01, 0.02, 0.04, 0.05, 0.06, 0.06]
+  },
+
+  "quasi_steady_coefficients": {
+    "cl_slope": 2.0,
+    "cd_zero": 0.02,
+    "cd_slope": 2.0,
+    "cm_slope": 0.5
+  },
+
+  "shape_correction_factors": {
+    "wind_nose_gain_per_deg": 0.00333,
+    "stabilizer_gain_per_width_ratio": 0.25,
+    "fairing_gain_per_width_ratio": 0.2,
+    "deck_type_gain": {
+      "flat": 1.0,
+      "streamlined": 1.35,
+      "box": 1.2,
+      "slotted": 1.25
+    }
+  },
+
+  "kalman_filter": {
+    "h1_process_noise": 0.001,
+    "h1_measure_noise": 0.05,
+    "a1_process_noise": 0.001,
+    "a1_measure_noise": 0.08,
+    "initial_state_covariance": 1.0
+  },
+
+  "ema_smoothing": {
+    "damping_alpha": 0.3,
+    "amplitude_alpha": 0.25
+  },
+
+  "low_wind_conservative": {
+    "threshold_mps": 3.0,
+    "min_damping_ratio": 0.8
+  },
+
+  "frequency_model": {
+    "bending_coeff": 1.2,
+    "torsional_to_bending_ratio": 2.5,
+    "deck_thickness_to_mass_ratio": 0.5,
+    "deck_density": 7850.0
+  },
+
+  "safety_criteria": {
+    "min_damping_for_safe": 0.0,
+    "min_flutter_margin_for_safe": 0.1
+  }
+}
