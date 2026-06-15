@@ -340,30 +340,116 @@ function updateCameraForBridge(bridge) {
     controls.target.set(0, bridge.deck_height + bridge.span * 0.04, 0); controls.update();
 }
 
+const WIND_VERTEX_SHADER = `
+    attribute vec3 aSeed;
+    attribute vec3 aBaseVel;
+    attribute vec3 aBaseColor;
+    attribute float aIndex;
+    uniform float uTime;
+    uniform float uWindSpeed;
+    uniform float uAttackAngle;
+    uniform float uSpan;
+    uniform float uWidth;
+    uniform float uDeckHeight;
+    varying vec3 vColor;
+    varying float vAlpha;
+
+    float hash(float n) { return fract(sin(n) * 43758.5453); }
+    vec3 hash3(vec3 p) {
+        p = vec3(dot(p, vec3(127.1, 311.7, 74.7)),
+                 dot(p, vec3(269.5, 183.3, 246.1)),
+                 dot(p, vec3(113.5, 271.9, 124.6)));
+        return -1.0 + 2.0 * fract(sin(p) * 43758.5453123);
+    }
+
+    void main() {
+        float sf = (uWindSpeed / 15.0) * (1.0 + uAttackAngle / 60.0);
+        float dirOffset = (uAttackAngle / 180.0) * 3.14159265;
+        float streamX = mod(aSeed.x + aBaseVel.x * uTime * sf * 0.85, uSpan * 2.9) - uSpan * 1.45;
+        float recyclePhase = floor((aSeed.x + aBaseVel.x * uTime * sf * 0.85) / (uSpan * 2.9));
+        float seedY = aSeed.y + hash(recyclePhase + aIndex) * uSpan * 0.45;
+        float seedZ = aSeed.z + hash(recyclePhase + aIndex * 1.7) * uWidth * 18.0 - uWidth * 9.0;
+        float verticalShear = 1.0 + ((seedY - uDeckHeight) / (uSpan * 0.4)) * 0.4;
+        verticalShear = max(0.4, verticalShear);
+        float posX = streamX * verticalShear;
+        float posY = seedY + aBaseVel.y * uTime * 0.06;
+        float swirl = sin(uTime * 0.8 + aIndex * 0.05) * 0.025 * sf;
+        float posZ = seedZ + aBaseVel.z * uTime * 0.06 + swirl + sin(dirOffset) * 0.04 * sf;
+        posZ = clamp(posZ, -uWidth * 10.0, uWidth * 10.0);
+        vec3 worldPos = vec3(posX, posY, posZ);
+        float t = clamp((seedY - (uDeckHeight - 5.0)) / (uSpan * 0.45), 0.0, 1.0);
+        vColor = aBaseColor * (0.9 + 0.2 * hash(aIndex + uTime * 0.3));
+        vAlpha = 0.65 + 0.3 * sin(uTime * 2.0 + aIndex * 0.1);
+        vec4 mvPosition = modelViewMatrix * vec4(worldPos, 1.0);
+        gl_PointSize = 1.35 * (300.0 / -mvPosition.z) * (0.8 + 0.4 * verticalShear);
+        gl_Position = projectionMatrix * mvPosition;
+    }
+`;
+
+const WIND_FRAGMENT_SHADER = `
+    varying vec3 vColor;
+    varying float vAlpha;
+    void main() {
+        vec2 uv = gl_PointCoord - 0.5;
+        float d = length(uv);
+        if (d > 0.5) discard;
+        float glow = smoothstep(0.5, 0.0, d);
+        gl_FragColor = vec4(vColor, glow * vAlpha * 0.78);
+    }
+`;
+
 function createWindParticles(span, width, deckHeight) {
     const count = 1500;
-    const positions = new Float32Array(count * 3);
-    const velocities = new Float32Array(count * 3);
-    const colors = new Float32Array(count * 3);
+    const baseGeo = new THREE.BufferGeometry();
+    const dummyPos = new Float32Array([0, 0, 0]);
+    baseGeo.setAttribute('position', new THREE.BufferAttribute(dummyPos, 3));
+
+    const seeds = new Float32Array(count * 3);
+    const baseVels = new Float32Array(count * 3);
+    const baseColors = new Float32Array(count * 3);
+    const indices = new Float32Array(count);
+
     for (let i = 0; i < count; i++) {
-        positions[i*3] = (Math.random() - 0.5) * span * 2.8;
-        positions[i*3+1] = deckHeight - 5 + (Math.random() - 0.2) * span * 0.45;
-        positions[i*3+2] = (Math.random() - 0.5) * width * 18;
-        velocities[i*3] = 0.8 + Math.random() * 2.2;
-        velocities[i*3+1] = (Math.random() - 0.5) * 0.35;
-        velocities[i*3+2] = (Math.random() - 0.5) * 0.25;
-        const t = ((positions[i*3+1] - (deckHeight - 5)) / (span * 0.45));
-        const c = new THREE.Color().setHSL(0.54 + t * 0.12, 0.72, 0.52 + t * 0.18);
-        colors[i*3] = c.r; colors[i*3+1] = c.g; colors[i*3+2] = c.b;
+        seeds[i*3] = (Math.random() - 0.5) * span * 2.8;
+        seeds[i*3+1] = deckHeight - 5 + (Math.random() - 0.2) * span * 0.45;
+        seeds[i*3+2] = (Math.random() - 0.5) * width * 18;
+        baseVels[i*3] = 0.8 + Math.random() * 2.2;
+        baseVels[i*3+1] = (Math.random() - 0.5) * 0.35;
+        baseVels[i*3+2] = (Math.random() - 0.5) * 0.25;
+        const t = ((seeds[i*3+1] - (deckHeight - 5)) / (span * 0.45));
+        const hue = 0.54 + t * 0.12, sat = 0.72, val = 0.52 + t * 0.18;
+        const c = new THREE.Color().setHSL(hue, sat, val);
+        baseColors[i*3] = c.r; baseColors[i*3+1] = c.g; baseColors[i*3+2] = c.b;
+        indices[i] = i;
     }
-    const geo = new THREE.BufferGeometry();
-    geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-    geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-    windParticles = new THREE.Points(geo, new THREE.PointsMaterial({
-        size: 1.35, vertexColors: true, transparent: true, opacity: 0.78,
-        blending: THREE.AdditiveBlending, sizeAttenuation: true, depthWrite: false
+
+    const instancedGeo = new THREE.InstancedBufferGeometry();
+    instancedGeo.index = baseGeo.index;
+    instancedGeo.setAttribute('position', baseGeo.getAttribute('position'));
+    instancedGeo.setAttribute('aSeed', new THREE.InstancedBufferAttribute(seeds, 3));
+    instancedGeo.setAttribute('aBaseVel', new THREE.InstancedBufferAttribute(baseVels, 3));
+    instancedGeo.setAttribute('aBaseColor', new THREE.InstancedBufferAttribute(baseColors, 3));
+    instancedGeo.setAttribute('aIndex', new THREE.InstancedBufferAttribute(indices, 1));
+    instancedGeo.instanceCount = count;
+
+    const windUniforms = {
+        uTime: { value: 0 },
+        uWindSpeed: { value: 12 },
+        uAttackAngle: { value: 3 },
+        uSpan: { value: span },
+        uWidth: { value: width },
+        uDeckHeight: { value: deckHeight },
+    };
+
+    windParticles = new THREE.Points(instancedGeo, new THREE.ShaderMaterial({
+        vertexShader: WIND_VERTEX_SHADER,
+        fragmentShader: WIND_FRAGMENT_SHADER,
+        uniforms: windUniforms,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
     }));
-    windParticles.userData = { velocities, span, width, deckHeight };
+    windParticles.userData = { uniforms: windUniforms, span, width, deckHeight, isGPUParticles: true };
     scene.add(windParticles);
 }
 
@@ -374,26 +460,15 @@ function animate() {
     const elapsed = (now - timeStart) / 1000;
 
     if (windParticles && showWindFlow) {
-        const pos = windParticles.geometry.attributes.position.array;
-        const vel = windParticles.userData.velocities;
-        const { span, width, deckHeight } = windParticles.userData;
-        const sf = (windSpeed / 15.0) * (1 + attackAngle / 60);
-        const dirOffset = (attackAngle / 180) * Math.PI;
-        for (let i = 0; i < pos.length / 3; i++) {
-            const idx = i * 3;
-            const verticalShear = 1 + ((pos[idx + 1] - deckHeight) / (span * 0.4)) * 0.4;
-            pos[idx] += vel[idx] * sf * 0.85 * Math.max(0.4, verticalShear);
-            pos[idx + 1] += vel[idx + 1] * 0.06;
-            const swirl = Math.sin(elapsed * 0.8 + i * 0.05) * 0.025 * sf;
-            pos[idx + 2] += vel[idx + 2] * 0.06 + swirl + Math.sin(dirOffset) * 0.04 * sf;
-            if (pos[idx] > span * 1.45) {
-                pos[idx] = -span * 1.45;
-                pos[idx + 1] = deckHeight - 5 + (Math.random() - 0.2) * span * 0.45;
-                pos[idx + 2] = (Math.random() - 0.5) * width * 18;
-            }
-            if (Math.abs(pos[idx + 2]) > width * 10) pos[idx + 2] *= -0.9;
+        windParticles.visible = true;
+        if (windParticles.userData.isGPUParticles) {
+            const u = windParticles.userData.uniforms;
+            u.uTime.value = elapsed;
+            u.uWindSpeed.value = windSpeed;
+            u.uAttackAngle.value = attackAngle;
         }
-        windParticles.geometry.attributes.position.needsUpdate = true;
+    } else if (windParticles) {
+        windParticles.visible = false;
     }
 
     scene.children.forEach(obj => {
