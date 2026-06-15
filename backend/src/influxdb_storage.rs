@@ -169,18 +169,20 @@ impl InfluxDBStorage {
             self.write_acceleration(&data).await?;
             count += 1;
         }
-        let wind = WindData {
-            bridge_id: payload.bridge_id.clone(),
-            sensor_id: payload.wind.sensor_id.clone(),
-            wind_speed: payload.wind.speed,
-            wind_direction: payload.wind.direction,
-            attack_angle: payload.wind.attack_angle,
-            temperature: payload.wind.temperature,
-            humidity: payload.wind.humidity,
-            timestamp: payload.timestamp,
-        };
-        self.write_wind_data(&wind).await?;
-        count += 1;
+        for wind_reading in payload.all_winds() {
+            let wind = WindData {
+                bridge_id: payload.bridge_id.clone(),
+                sensor_id: wind_reading.sensor_id.clone(),
+                wind_speed: wind_reading.speed,
+                wind_direction: wind_reading.direction,
+                attack_angle: wind_reading.attack_angle,
+                temperature: wind_reading.temperature,
+                humidity: wind_reading.humidity,
+                timestamp: payload.timestamp,
+            };
+            self.write_wind_data(&wind).await?;
+            count += 1;
+        }
         Ok(count)
     }
 

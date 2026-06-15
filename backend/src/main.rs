@@ -8,6 +8,7 @@ pub mod dtu_receiver;
 pub mod flutter_analyzer;
 pub mod shape_optimizer;
 pub mod alarm_mqtt;
+pub mod metrics;
 
 use crate::dtu_receiver::DTUReceiver;
 use crate::flutter_analyzer::FlutterAnalyzer;
@@ -17,19 +18,39 @@ use crate::models::SystemMessage;
 use crate::mqtt_alerts::{AlertManager, MQTTAlertService};
 use crate::influxdb_storage::InfluxDBStorage;
 
+use crate::metrics::{init_metrics, register_metrics};
 use crate::models::AppState;
 use actix_cors::Cors;
 use actix_web::{web, App, HttpServer};
+use actix_files as fs;
 use dotenv::dotenv;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex, RwLock};
-use tracing::info;
+use tracing::{info, level_filters::LevelFilter};
+use tracing_subscriber::{fmt, EnvFilter, Registry};
+use tracing_subscriber::layer::SubscriberExt;
 
 #[actix_web::main]
 async fn main() -> std::io::Result<()> {
     dotenv().ok();
-    tracing_subscriber::fmt::init();
+
+    let env_filter = EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| EnvFilter::default().add_directive(LevelFilter::INFO.into()));
+
+    let subscriber = Registry::default()
+        .with(env_filter)
+        .with(fmt::layer()
+            .with_target(true)
+            .with_thread_ids(true)
+            .with_file(false)
+            .with_line_number(false));
+
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("Failed to set tracing subscriber");
+
+    init_metrics();
+    info!("Prometheus metrics initialized");
 
     let config_path = std::env::var("CONFIG_DIR").unwrap_or_else(|_| "../config".to_string());
     info!("加载配置目录: {}", config_path);
@@ -199,6 +220,7 @@ async fn main() -> std::io::Result<()> {
         App::new()
             .app_data(app_state.clone())
             .wrap(Cors::permissive())
+            .configure(register_metrics)
             .route("/api/v1/health", web::get().to(handlers::health_check))
             .route("/api/v1/bridges", web::get().to(handlers::get_bridges))
             .route("/api/v1/bridges/{id}", web::get().to(handlers::get_bridge_handler))
@@ -212,6 +234,7 @@ async fn main() -> std::io::Result<()> {
             .route("/api/v1/aerodynamics/recent/{id}", web::get().to(handlers::get_recent_aero_result))
             .route("/api/v1/aerodynamics/flutter-curve/{id}", web::get().to(handlers::get_flutter_curve))
             .route("/api/v1/optimization/run", web::post().to(handlers::run_optimization))
+            .service(fs::Files::new("/", "/app/frontend").index_file("index.html"))
     })
     .bind((host.as_str(), port))?
     .run()

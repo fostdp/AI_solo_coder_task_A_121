@@ -48,7 +48,7 @@ END
 # Create users
 CREATE USER "bridge_reader" WITH PASSWORD 'bridge_read_2024'
 CREATE USER "bridge_writer" WITH PASSWORD 'bridge_write_2024'
-CREATE USER "admin" WITH PASSWORD 'bridge_admin_2024' WITH ALL PRIVILEGES
+CREATE USER "admin" WITH PASSWORD 'admin123' WITH ALL PRIVILEGES
 
 # Grant permissions
 GRANT READ ON "bridge_monitoring" TO "bridge_reader"

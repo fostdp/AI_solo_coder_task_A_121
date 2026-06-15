@@ -116,7 +116,32 @@ pub struct DTUPayload {
     pub timestamp: DateTime<Utc>,
     pub cable_forces: Vec<CableForceReading>,
     pub accelerations: Vec<AccelerationReading>,
-    pub wind: WindReading,
+    #[serde(default)]
+    pub wind: Option<WindReading>,
+    #[serde(default)]
+    pub winds: Vec<WindReading>,
+    #[serde(default)]
+    pub event_type: String,
+}
+
+impl DTUPayload {
+    pub fn all_winds(&self) -> Vec<&WindReading> {
+        let mut result: Vec<&WindReading> = self.winds.iter().collect();
+        if let Some(w) = &self.wind {
+            result.push(w);
+        }
+        result
+    }
+
+    pub fn max_wind_speed(&self) -> f64 {
+        self.all_winds().iter().map(|w| w.speed).fold(0.0, f64::max)
+    }
+
+    pub fn avg_turbulence(&self) -> f64 {
+        let winds = self.all_winds();
+        if winds.is_empty() { return 0.1; }
+        winds.iter().map(|w| w.turbulence_intensity).sum::<f64>() / winds.len() as f64
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,7 +168,11 @@ pub struct WindReading {
     pub attack_angle: f64,
     pub temperature: f64,
     pub humidity: f64,
+    #[serde(default = "default_turbulence")]
+    pub turbulence_intensity: f64,
 }
+
+fn default_turbulence() -> f64 { 0.1 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FlutterDerivatives {

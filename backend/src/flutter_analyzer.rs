@@ -68,16 +68,28 @@ impl FlutterAnalyzer {
 
     async fn process_dtu_payload(&self, payload: DTUPayload) -> Result<AerodynamicResult, String> {
         let bridge_id = payload.bridge_id.clone();
-        let wind_speed = payload.wind.speed;
-        let attack_angle = payload.wind.attack_angle;
+        let wind_speed = payload.max_wind_speed();
+        let turbulence = payload.avg_turbulence();
+
+        let winds = payload.all_winds();
+        let attack_angle = if winds.is_empty() {
+            0.0
+        } else {
+            let max_wind = winds.iter().max_by(|a, b| a.speed.partial_cmp(&b.speed).unwrap()).unwrap();
+            max_wind.attack_angle
+        };
 
         let model = self.get_or_create_model(&bridge_id).await
             .ok_or_else(|| format!("Bridge not found: {}", bridge_id))?;
 
-        let result = model.evaluate_aerodynamic_performance(wind_speed, attack_angle, None);
-        debug!("[Analyzer] {}: U={:.1}m/s, α={:.1}°, ξ={:.4}, A={:.3}m, Ucr={:.1}m/s",
-            bridge_id, wind_speed, attack_angle,
-            result.aerodynamic_damping, result.vibration_amplitude, result.flutter_critical_speed);
+        let shape = Some(DeckAerodynamicShape::default());
+        let mut result = model.evaluate_aerodynamic_performance(wind_speed, attack_angle, shape.as_ref());
+        result.turbulence_intensity = turbulence;
+
+        debug!("[Analyzer] {}: U={:.1}m/s, α={:.1}°, I={:.3}, ξ={:.4}, A={:.3}m, Ucr={:.1}m/s, event={}",
+            bridge_id, wind_speed, attack_angle, turbulence,
+            result.aerodynamic_damping, result.vibration_amplitude, result.flutter_critical_speed,
+            payload.event_type);
 
         Ok(result)
     }

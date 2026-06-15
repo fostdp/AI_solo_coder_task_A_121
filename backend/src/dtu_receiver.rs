@@ -82,20 +82,21 @@ impl DTUReceiver {
             } else { count += 1; }
         }
 
-        let wd = &payload.wind;
-        let msg = SystemMessage::StorageWriteRequest {
-            measurement: StorageMeasurement::WindData {
-                bridge_id: bridge_id.clone(),
-                sensor_id: wd.sensor_id.clone(),
-                speed: wd.speed,
-                dir: wd.direction,
-                attack: wd.attack_angle,
-                time: timestamp,
-            },
-        };
-        if let Err(e) = self.storage_tx.send(msg).await {
-            warn!("[DTU] 风数据写入队列失败: {}", e);
-        } else { count += 1; }
+        for wd in payload.all_winds() {
+            let msg = SystemMessage::StorageWriteRequest {
+                measurement: StorageMeasurement::WindData {
+                    bridge_id: bridge_id.clone(),
+                    sensor_id: wd.sensor_id.clone(),
+                    speed: wd.speed,
+                    dir: wd.direction,
+                    attack: wd.attack_angle,
+                    time: timestamp,
+                },
+            };
+            if let Err(e) = self.storage_tx.send(msg).await {
+                warn!("[DTU] 风数据写入队列失败: {}", e);
+            } else { count += 1; }
+        }
 
         Ok(count)
     }
@@ -104,7 +105,7 @@ impl DTUReceiver {
         if payload.bridge_id.is_empty() {
             return Err("bridge_id cannot be empty".to_string());
         }
-        if payload.cable_forces.is_empty() && payload.accelerations.is_empty() {
+        if payload.cable_forces.is_empty() && payload.accelerations.is_empty() && payload.all_winds().is_empty() {
             return Err("payload has no sensor data".to_string());
         }
         for cf in &payload.cable_forces {
@@ -117,11 +118,16 @@ impl DTUReceiver {
                 return Err(format!("acceleration out of range: {}g", acc.az));
             }
         }
-        if payload.wind.speed < 0.0 || payload.wind.speed > 150.0 {
-            return Err(format!("wind_speed out of range: {} m/s", payload.wind.speed));
-        }
-        if payload.wind.attack_angle < -45.0 || payload.wind.attack_angle > 45.0 {
-            return Err(format!("attack_angle out of range: {} deg", payload.wind.attack_angle));
+        for wd in payload.all_winds() {
+            if wd.speed < 0.0 || wd.speed > 150.0 {
+                return Err(format!("wind_speed out of range: {} m/s", wd.speed));
+            }
+            if wd.attack_angle < -45.0 || wd.attack_angle > 45.0 {
+                return Err(format!("attack_angle out of range: {} deg", wd.attack_angle));
+            }
+            if wd.turbulence_intensity < 0.0 || wd.turbulence_intensity > 1.0 {
+                return Err(format!("turbulence_intensity out of range: {}", wd.turbulence_intensity));
+            }
         }
         Ok(())
     }
